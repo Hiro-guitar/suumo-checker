@@ -24,8 +24,8 @@ jobs:
 
       - name: Set service account JSON
         env:
-          SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: echo "$SERVICE_ACCOUNT_JSON" > service_account.json
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
 
       - name: Run main.py
         run: python main.py
