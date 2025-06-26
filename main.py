@@ -20,8 +20,8 @@ now_label = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%m月%d日%H時%M分'
 
 # === 認証取得 ===
 def get_service():
-    json_str = os.environ['GOOGLE_SERVICE_ACCOUNT_JSON']
-    service_account_info = json.loads(json_str)
+    with open('service_account.json', 'r') as f:
+        service_account_info = json.load(f)
 
     creds = service_account.Credentials.from_service_account_info(
         service_account_info,
