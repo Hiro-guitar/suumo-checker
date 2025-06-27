@@ -7,29 +7,26 @@ from zoneinfo import ZoneInfo
 import os
 import json
 
-# === 認証と設定 ===
+# === 定数 ===
 SPREADSHEET_ID_SOURCE = '1oZKxfoZbFWzTfZvSU_ZVHtnWLDmJDYNd6MSfNqlB074'
 SOURCE_RANGE = 'シート1!A:J'
-
 SPREADSHEET_ID_LOG = '195OS2gb97TUJS8srYlqLT5QXuXU0zUZxmbeuWtsGQRY'
 LOG_SHEET_NAME = 'Sheet1'
-
 KEYWORD = 'えほうまき'
 BASE_URL = 'https://suumo.jp'
-now_label = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%m月%d日%H時%M分')
+now_label = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%Y/%m/%d %H:%M')
 
-# === 認証取得 ===
+# === Google Sheets API 認証 ===
 def get_service():
     with open('service_account.json', 'r') as f:
         service_account_info = json.load(f)
-
     creds = service_account.Credentials.from_service_account_info(
         service_account_info,
         scopes=['https://www.googleapis.com/auth/spreadsheets']
     )
     return build('sheets', 'v4', credentials=creds)
 
-# === ソースシートから取得 ===
+# === 元データ取得 ===
 def get_source_data(service):
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=SPREADSHEET_ID_SOURCE, range=SOURCE_RANGE).execute()
@@ -42,30 +39,40 @@ def get_source_data(service):
             data.append((name, url))
     return data
 
-# === リンク取得 ===
+# === 代表物件リンク抽出 ===
 def extract_detail_links(start_url):
     try:
-        res = requests.get(start_url, timeout=10)
-        res.encoding = res.apparent_encoding
+        headers = {
+            'User-Agent': 'Mozilla/5.0'
+        }
+        res = requests.get(start_url, headers=headers, timeout=15)
+        res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
-        links = [BASE_URL + a['href'] for a in soup.find_all('a', href=True) if a['href'].startswith('/chintai/jnc_')]
+        links = [BASE_URL + a['href'] for a in soup.find_all('a', href=True) if '/chintai/' in a['href'] and 'jnc_' in a['href']]
         return links
     except Exception as e:
-        print(f"[ERROR] {start_url} のリンク取得に失敗: {e}")
+        print(f"[ERROR] {start_url} のリンク取得失敗: {e}")
         return []
 
 # === キーワードチェック ===
 def check_keyword_in_page(detail_url):
     try:
-        res = requests.get(detail_url, timeout=10)
-        res.encoding = res.apparent_encoding
+        headers = {
+            'User-Agent': 'Mozilla/5.0'
+        }
+        res = requests.get(detail_url, headers=headers, timeout=15)
+        res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
+
+        # 該当要素がなければ全文検索
         target = soup.select_one('.viewform_advance_shop-name')
-        return KEYWORD in target.get_text() if target else False, None
+        text = target.get_text() if target else soup.get_text()
+
+        return KEYWORD in text, None
     except Exception as e:
         return False, str(e)
 
-# === ログスプレッドシートの読み込み ===
+# === ログの読み込み（代表URLは信用せず、ログの構造だけ使う） ===
 def load_existing_log(service):
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=SPREADSHEET_ID_LOG, range=LOG_SHEET_NAME).execute()
@@ -74,7 +81,7 @@ def load_existing_log(service):
     existing_data = {tuple(row[:3]): row for row in rows[1:]} if len(rows) > 1 else {}
     return headers, existing_data
 
-# === ログをスプレッドシートに保存 ===
+# === ログを保存 ===
 def save_log_to_sheet(service, headers, data_rows):
     body = {
         'values': [headers] + list(data_rows.values())
@@ -86,46 +93,43 @@ def save_log_to_sheet(service, headers, data_rows):
         body=body
     ).execute()
 
-# === メイン ===
+# === メイン処理 ===
 def main():
     service = get_service()
     entries = get_source_data(service)
     headers, existing_data = load_existing_log(service)
 
+    # 新しい日付ラベル列を追加
     if now_label not in headers:
         headers.append(now_label)
 
-    new_keys = set()
+    new_data = {}
 
     for name, start_url in entries:
         detail_links = extract_detail_links(start_url)
+
         if not detail_links:
             key = (name, start_url, '')
-            new_keys.add(key)
-            if key not in existing_data:
-                existing_data[key] = [name, start_url, ''] + [''] * (len(headers) - 4)
-            existing_data[key].append('NO DETAIL LINKS FOUND')
+            row = [name, start_url, ''] + [''] * (len(headers) - 4)
+            row.append('NO DETAIL LINKS FOUND')
+            new_data[key] = row
             continue
 
         for detail_url in detail_links:
             key = (name, start_url, detail_url)
-            new_keys.add(key)
-            if key not in existing_data:
-                existing_data[key] = [name, start_url, detail_url] + [''] * (len(headers) - 4)
+            row = [name, start_url, detail_url] + [''] * (len(headers) - 4)
             found, error = check_keyword_in_page(detail_url)
             result = '⭕️' if found else f'ERROR: {error}' if error else ''
-            existing_data[key].append(result)
+            row.append(result)
+            new_data[key] = row
 
-    # 日付列が増えたことで不足している行を補完
-    for row in existing_data.values():
+    # 行の長さを統一
+    for row in new_data.values():
         while len(row) < len(headers):
             row.append('')
 
-    # 不要な行（削除済みの物件）を除外
-    filtered_data = {k: v for k, v in existing_data.items() if k in new_keys}
-
-    save_log_to_sheet(service, headers, filtered_data)
-    print("✅ ログを書き込みました")
+    save_log_to_sheet(service, headers, new_data)
+    print("✅ 最新の代表URLでログを更新しました")
 
 if __name__ == '__main__':
     main()
