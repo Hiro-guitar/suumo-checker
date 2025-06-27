@@ -93,43 +93,44 @@ def save_log_to_sheet(service, headers, data_rows):
         body=body
     ).execute()
 
-# === メイン処理 ===
+# === メイン処理 修正版 ===
 def main():
     service = get_service()
     entries = get_source_data(service)
     headers, existing_data = load_existing_log(service)
 
-    # 新しい日付ラベル列を追加
     if now_label not in headers:
         headers.append(now_label)
-
-    new_data = {}
 
     for name, start_url in entries:
         detail_links = extract_detail_links(start_url)
 
         if not detail_links:
             key = (name, start_url, '')
-            row = [name, start_url, ''] + [''] * (len(headers) - 4)
-            row.append('NO DETAIL LINKS FOUND')
-            new_data[key] = row
+            if key not in existing_data:
+                existing_data[key] = [name, start_url, ''] + [''] * (len(headers) - 4)
+            while len(existing_data[key]) < len(headers) - 1:
+                existing_data[key].append('')
+            existing_data[key].append('NO DETAIL LINKS FOUND')
             continue
 
         for detail_url in detail_links:
             key = (name, start_url, detail_url)
-            row = [name, start_url, detail_url] + [''] * (len(headers) - 4)
+            if key not in existing_data:
+                existing_data[key] = [name, start_url, detail_url] + [''] * (len(headers) - 4)
+            while len(existing_data[key]) < len(headers) - 1:
+                existing_data[key].append('')
             found, error = check_keyword_in_page(detail_url)
             result = '⭕️' if found else f'ERROR: {error}' if error else ''
-            row.append(result)
-            new_data[key] = row
+            existing_data[key].append(result)
 
     # 行の長さを統一
-    for row in new_data.values():
+    for row in existing_data.values():
         while len(row) < len(headers):
             row.append('')
 
-    save_log_to_sheet(service, headers, new_data)
-    print("✅ 最新の代表URLでログを更新しました")
+    save_log_to_sheet(service, headers, existing_data)
+    print("✅ 過去のログを保持したまま、最新の結果を追記しました")
 
 if __name__ == '__main__':
     main()
