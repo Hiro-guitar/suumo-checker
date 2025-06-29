@@ -67,7 +67,7 @@ def load_existing_log(service):
     headers = rows[0] if rows else ['物件名', '元ページURL', '代表物件URL']
     existing_data = {}
     for i, row in enumerate(rows[1:], start=2):
-        key = tuple(row[:3])
+        key = (row[0], row[1])  # 物件名＋元ページURL をキーにする
         existing_data[key] = (i, row)
     return headers, existing_data
 
@@ -87,7 +87,6 @@ def main():
     entries = get_source_data(service)
     headers, existing_data = load_existing_log(service)
 
-    # 時刻列追加
     if now_label not in headers:
         headers.append(now_label)
     now_index = headers.index(now_label)
@@ -95,7 +94,7 @@ def main():
     # 削除処理
     valid_entry_keys = {(name, url) for name, url in entries}
     rows_to_delete = [
-        row_num for (name, url, _), (row_num, _) in existing_data.items()
+        row_num for (name, url), (row_num, _) in existing_data.items()
         if (name, url) not in valid_entry_keys
     ]
     if rows_to_delete:
@@ -116,7 +115,7 @@ def main():
         ).execute()
         print(f"🗑️ {len(rows_to_delete)} 件の削除済み物件をログから削除しました")
 
-    # 再読込（削除後）
+    # 再読込
     headers, existing_data = load_existing_log(service)
     if now_label not in headers:
         headers.append(now_label)
@@ -131,39 +130,37 @@ def main():
             print(f"[RETRY {attempt}] リンク取得失敗: {start_url}")
             time.sleep(2)
 
+        key = (name, start_url)
+
         if not detail_links:
             print(f"[ERROR] 最終的にリンク取得失敗: {start_url}")
-
-            # 代表URLがすでにある場合 → その行にエラー記録
-            updated = False
-            for (k_name, k_url, k_detail), (_, row) in existing_data.items():
-                if k_name == name and k_url == start_url and k_detail:
-                    if len(row) <= now_index:
-                        row.extend([''] * (now_index - len(row) + 1))
-                    row[now_index] = 'ERROR: リンク取得失敗'
-                    updated = True
-                    break
-
-            # なければ空のURLでエラー行作成
-            if not updated:
-                key = (name, start_url, '')
-                if key not in existing_data:
-                    existing_data[key] = (None, [name, start_url, ''] + [''] * (len(headers) - 3))
+            if key in existing_data:
                 row = existing_data[key][1]
                 if len(row) <= now_index:
                     row.extend([''] * (now_index - len(row) + 1))
                 row[now_index] = 'ERROR: リンク取得失敗'
+            else:
+                row = [name, start_url, ''] + [''] * (len(headers) - 3)
+                row[now_index] = 'ERROR: リンク取得失敗'
+                existing_data[key] = (None, row)
             continue
 
-        for detail_url in detail_links:
-            key = (name, start_url, detail_url)
-            if key not in existing_data:
-                existing_data[key] = (None, [name, start_url, detail_url] + [''] * (len(headers) - 3))
+        # 正常にリンクが取得できた場合：最初のリンクだけ使う
+        detail_url = detail_links[0]
+        if key in existing_data:
             row = existing_data[key][1]
-            if len(row) <= now_index:
-                row.extend([''] * (now_index - len(row) + 1))
-            found, error = check_keyword_in_page(detail_url)
-            row[now_index] = '⭕️' if found else f'ERROR: {error}' if error else ''
+            if len(row) < 3:
+                row.extend([''] * (3 - len(row)))
+            row[2] = detail_url  # 代表URLを更新
+        else:
+            row = [name, start_url, detail_url] + [''] * (len(headers) - 3)
+            existing_data[key] = (None, row)
+
+        if len(row) <= now_index:
+            row.extend([''] * (now_index - len(row) + 1))
+
+        found, error = check_keyword_in_page(detail_url)
+        row[now_index] = '⭕️' if found else f'ERROR: {error}' if error else ''
 
     # 保存
     final_data = {k: v[1] for k, v in existing_data.items()}
