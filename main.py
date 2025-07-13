@@ -34,7 +34,8 @@ def get_source_data(service):
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=SPREADSHEET_ID_SOURCE, range=SOURCE_RANGE).execute()
     values = result.get('values', [])
-    return [(row[0], row[9]) for row in values if len(row) >= 10 and row[0] and row[9].startswith('http')]
+    return [(row[0], row[1], row[9]) for row in values if len(row) >= 10 and row[0] and row[9].startswith('http')]
+    # (物件名, 部屋番号, 掲載ページURL)
 
 # === 代表URL抽出 ===
 def extract_detail_links(start_url):
@@ -64,11 +65,12 @@ def load_existing_log(service):
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=SPREADSHEET_ID_LOG, range=LOG_SHEET_NAME).execute()
     rows = result.get('values', [])
-    headers = rows[0] if rows else ['物件名', '元ページURL', '代表物件URL']
+    headers = rows[0] if rows else ['物件名', '部屋番号', '掲載ページURL', '代表ページURL']
     existing_data = {}
     for i, row in enumerate(rows[1:], start=2):
-        key = (row[0], row[1])  # 物件名＋元ページURL をキーにする
-        existing_data[key] = (i, row)
+        if len(row) >= 3:
+            key = (row[0], row[1], row[2])  # 物件名, 部屋番号, 掲載ページURL
+            existing_data[key] = (i, row)
     return headers, existing_data
 
 # === ログ保存 ===
@@ -92,10 +94,10 @@ def main():
     now_index = headers.index(now_label)
 
     # 削除処理
-    valid_entry_keys = {(name, url) for name, url in entries}
+    valid_entry_keys = {(name, room_no, url) for name, room_no, url in entries}
     rows_to_delete = [
-        row_num for (name, url), (row_num, _) in existing_data.items()
-        if (name, url) not in valid_entry_keys
+        row_num for (name, room_no, url), (row_num, _) in existing_data.items()
+        if (name, room_no, url) not in valid_entry_keys
     ]
     if rows_to_delete:
         rows_to_delete.sort(reverse=True)
@@ -121,7 +123,7 @@ def main():
         headers.append(now_label)
     now_index = headers.index(now_label)
 
-    for name, start_url in entries:
+    for name, room_no, start_url in entries:
         detail_links = []
         for attempt in range(1, MAX_RETRY + 1):
             detail_links = extract_detail_links(start_url)
@@ -130,7 +132,7 @@ def main():
             print(f"[RETRY {attempt}] リンク取得失敗: {start_url}")
             time.sleep(2)
 
-        key = (name, start_url)
+        key = (name, room_no, start_url)
 
         if not detail_links:
             print(f"[ERROR] 最終的にリンク取得失敗: {start_url}")
@@ -140,20 +142,19 @@ def main():
                     row.extend([''] * (now_index - len(row) + 1))
                 row[now_index] = 'ERROR: リンク取得失敗'
             else:
-                row = [name, start_url, ''] + [''] * (len(headers) - 3)
+                row = [name, room_no, start_url, ''] + [''] * (len(headers) - 4)
                 row[now_index] = 'ERROR: リンク取得失敗'
                 existing_data[key] = (None, row)
             continue
 
-        # 正常にリンクが取得できた場合：最初のリンクだけ使う
         detail_url = detail_links[0]
         if key in existing_data:
             row = existing_data[key][1]
-            if len(row) < 3:
-                row.extend([''] * (3 - len(row)))
-            row[2] = detail_url  # 代表URLを更新
+            if len(row) < 4:
+                row.extend([''] * (4 - len(row)))
+            row[3] = detail_url  # 代表ページURL
         else:
-            row = [name, start_url, detail_url] + [''] * (len(headers) - 3)
+            row = [name, room_no, start_url, detail_url] + [''] * (len(headers) - 4)
             existing_data[key] = (None, row)
 
         if len(row) <= now_index:
