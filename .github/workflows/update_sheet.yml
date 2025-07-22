@@ -1,7 +1,7 @@
 name: Update Google Sheets every 5 minutes
 
-on:
-  schedule:
+#on:
+  #schedule:
     - cron: '30 3 * * *'
     - cron: '35 3 * * *'
     - cron: '40 3 * * *'
